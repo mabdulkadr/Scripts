@@ -32,6 +32,10 @@ Param (
     [string]$LogFilePath = "C:\CreateStaticGroup\GroupCreationLog.txt"
 )
 
+# Automatically Connect to Microsoft Graph using App-based Authentication
+$tenantID = "c2b04da6-8487-41cc-8803-90321048a772"
+$appID = "6c70c0c3-e3a6-489c-973e-51e8138540f9"          #ClientID
+$appSecret = "Uoj8Q~1_acd.7WU4Ol3vOczrfeYQbdHR_mzhTb6n"  #Client Secret
 
 # Function to log messages with timestamps and color-coded output
 Function Log-Message {
@@ -60,7 +64,7 @@ Function Log-Message {
     }
 }
 
-
+# Connect to Microsoft Graph
 
 # Install and Import Microsoft Graph Modules
 Write-Host "Installing Microsoft Graph modules if required (current user scope)" -ForegroundColor Cyan
@@ -99,8 +103,82 @@ Import-Module Microsoft.Graph.Beta.DeviceManagement.Actions
 # Authenticate with an MFA enabled account
 Connect-MgGraph -Scopes "DeviceManagementConfiguration.ReadWrite.All"
 
+
+# Function to Connect to Microsoft Graph
+function Connect-ToGraph {
+    param (
+        [Parameter(Mandatory = $false)] [string]$Tenant,
+        [Parameter(Mandatory = $false)] [string]$AppId,
+        [Parameter(Mandatory = $false)] [string]$AppSecret,
+        [Parameter(Mandatory = $false)] [string]$Scopes = "DeviceManagementConfiguration.ReadWrite.All"
+    )
+
+    $version = (Get-Module microsoft.graph.authentication).Version.Major
+
+    if ($AppId) {
+        # App-based Authentication
+        $body = @{
+            grant_type    = "client_credentials"
+            client_id     = $AppId
+            client_secret = $AppSecret
+            scope         = "https://graph.microsoft.com/.default"
+        }
+
+        $response = Invoke-RestMethod -Method Post -Uri "https://login.microsoftonline.com/$Tenant/oauth2/v2.0/token" -Body $body
+        $accessToken = $response.access_token
+
+        if ($version -eq 2) {
+            Write-Host "Version 2 module detected" -ForegroundColor Yellow
+            $accessTokenFinal = ConvertTo-SecureString -String $accessToken -AsPlainText -Force
+        } else {
+            Write-Host "Version 1 Module Detected" -ForegroundColor Yellow
+            Select-MgProfile -Name Beta
+            $accessTokenFinal = $accessToken
+        }
+        Connect-MgGraph -AccessToken $accessTokenFinal
+        Write-Host "Connected to Intune tenant $Tenant using App-based Authentication" -ForegroundColor Green
+    } else {
+        # User-based Authentication
+        if ($version -eq 2) {
+            Write-Host "Version 2 module detected" -ForegroundColor Yellow
+        } else {
+            Write-Host "Version 1 Module Detected" -ForegroundColor Yellow
+            Select-MgProfile -Name Beta
+        }
+        Connect-MgGraph -Scopes $Scopes
+        Write-Host "Connected to Intune tenant $((Get-MgTenant).TenantId)" -ForegroundColor Green
+    }
+}
+
+# Connect to Microsoft Graph
+Connect-ToGraph -Tenant $tenantID -AppId $appID -AppSecret $appSecret
+
+
+# Function to connect to Azure AD automatically
+function Connect-ToAzureAD {
+    param (
+        [Parameter(Mandatory = $true)]
+        [string]$TenantID,
+
+        [Parameter(Mandatory = $true)]
+        [string]$AppID,  # ClientID
+
+        [Parameter(Mandatory = $true)]
+        [string]$AppSecret  # Client Secret Value
+    )
+
+    # Connect using AzureAD module
+    $AzureADToken = Connect-AzAccount -ServicePrincipal -TenantId $TenantID -ApplicationId $AppID -Credential (New-Object PSCredential($AppID, (ConvertTo-SecureString $AppSecret -AsPlainText -Force)))
+
+    if ($AzureADToken) {
+        Write-Host "Connected to Azure AD!" -ForegroundColor Green
+    } else {
+        Write-Error "Failed to authenticate to Azure AD."
+    }
+}
+
 # Connect to AzureAD
-Connect-AzureAD
+Connect-ToAzureAD -Tenant $tenantID -AppId $appID -AppSecret $appSecret
 
 # Function to determine the next group number based on existing groups
 Function Get-NextGroupNumber {
